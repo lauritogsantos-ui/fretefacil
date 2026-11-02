@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0B5FFF">
+<title>Frete Fácil</title>
+<style>
+:root{--bg:#fff;--card:#f2f4f7;--text:#101828;--muted:#475467;--primary:#0b5fff;--on:#fff;--good:#067647;--bad:#b42318;--border:#98a2b3}
+@media (prefers-color-scheme:dark){:root{--bg:#0b0f14;--card:#1a212b;--text:#f5f7fa;--muted:#b5bec9;--primary:#6ea3ff;--on:#0b0f14;--good:#4ade80;--bad:#ff8a80;--border:#5b6675}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:18px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding-bottom:84px}
+main{max-width:560px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:0 0 14px}
+label{display:block;font-weight:600;color:var(--muted);font-size:16px;margin-bottom:6px}
+input[type=text],input[type=number],input[type=email]{width:100%;min-height:56px;font:inherit;color:var(--text);background:var(--card);border:1.5px solid var(--border);border-radius:12px;padding:0 14px}
+input:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var(--primary);outline-offset:2px}
+.field{margin-bottom:14px}.row{display:flex;gap:8px}
+button{font:inherit;cursor:pointer}
+.btn{width:100%;min-height:56px;border-radius:14px;border:2px solid var(--primary);background:var(--primary);color:var(--on);font-weight:700;font-size:20px;transition:transform .08s}
+.btn:active{transform:scale(.97)}.btn.sec{background:transparent;color:var(--primary)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.mic{flex:0 0 56px;min-height:56px;border-radius:12px;border:0;background:var(--primary);color:var(--on);font-size:24px}
+.mic.on{background:var(--bad)}
+.stack{display:grid;gap:12px;margin-top:6px}
+.card{background:var(--card);border-radius:16px;padding:14px 16px;margin-bottom:14px;animation:in .25s ease}
+@keyframes in{from{opacity:0;transform:translateY(10px)}}
+.line{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0}
+.line span:first-child{color:var(--muted)}
+.big{font-size:24px;font-weight:800}.good{color:var(--good)}.bad{color:var(--bad)}
+.note{color:var(--muted);font-size:15px;margin:6px 0}
+.err{color:var(--bad);font-weight:600;margin:8px 0}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--bg);border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;min-height:64px;border:0;background:none;color:var(--muted);font-weight:700;font-size:15px}
+nav button[aria-selected=true]{color:var(--primary);box-shadow:inset 0 3px 0 var(--primary)}
+.sw{display:flex;align-items:center;justify-content:space-between;min-height:56px;gap:12px;margin-bottom:12px}
+.sw input{width:28px;height:28px}
+.del{background:none;border:0;color:var(--bad);font-weight:700;min-height:48px;padding:0 4px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+
+<section id="tab-calc" role="tabpanel">
+  <h1>Calcular frete</h1>
+  <div class="field"><label for="origin">Saída</label>
+    <div class="row"><input id="origin" type="text" placeholder="Rua, número, cidade" autocomplete="off"><button class="mic" data-for="origin" aria-label="Falar o endereço de saída">🎤</button></div></div>
+  <div class="field"><label for="dest">Destino</label>
+    <div class="row"><input id="dest" type="text" placeholder="Rua, número, cidade" autocomplete="off"><button class="mic" data-for="dest" aria-label="Falar o endereço de destino">🎤</button></div></div>
+  <div class="field"><label for="tolls">Pedágios (R$) — opcional</label><input id="tolls" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0,00"></div>
+  <div class="field"><label for="manualKm">Distância manual (km) — se a busca falhar</label><input id="manualKm" type="number" inputmode="decimal" min="0" step="0.1" placeholder="Deixe vazio para calcular pela rota"></div>
+  <div class="stack">
+    <button class="btn" id="calc">Calcular viagem</button>
+    <button class="btn sec" id="gmaps">Abrir no Google Maps</button>
+    <button class="btn sec" id="waze">Abrir no Waze</button>
+  </div>
+  <p class="err" id="calcErr" role="alert"></p>
+  <div id="result" aria-live="polite"></div>
+  <p class="note" id="voiceNote" hidden>Voz indisponível neste navegador. Use o microfone do teclado do celular.</p>
+</section>
+
+<section id="tab-hist" role="tabpanel" hidden>
+  <h1>Histórico</h1>
+  <div id="histList"></div>
+</section>
+
+<section id="tab-set" role="tabpanel" hidden>
+  <h1>Ajustes</h1>
+  <div id="setFields"></div>
+  <div class="sw"><label for="emptyReturn" style="margin:0;color:var(--text)">Contar volta vazio nos custos</label><input id="emptyReturn" type="checkbox"></div>
+  <div class="stack">
+    <button class="btn" id="saveSet">Salvar</button>
+    <button class="btn sec" id="export">Exportar backup</button>
+    <button class="btn sec" id="importBtn">Importar backup</button>
+    <input id="importFile" type="file" accept="application/json" hidden>
+  </div>
+  <p class="note" id="setMsg" role="status"></p>
+  <p class="note">Os dados ficam só neste aparelho/navegador. Use o backup para levar para outro.</p>
+</section>
+
+</main>
+
+<nav role="tablist" aria-label="Seções">
+  <button role="tab" data-tab="calc" aria-selected="true">Calcular</button>
+  <button role="tab" data-tab="hist" aria-selected="false">Histórico</button>
+  <button role="tab" data-tab="set" aria-selected="false">Ajustes</button>
+</nav>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const round2 = (n) => Math.round(n * 100) / 100;
+const brl = (n) => 'R$ ' + n.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+const num = (v) => parseFloat(String(v).replace(',', '.'));
+
+/* ---------- armazenamento ---------- */
+const DEFAULTS = {valuePerKm:5, kmPerLiter:3, fuelPrice:6, maintenancePerKm:0.6, otherPerKm:0.2, countEmptyReturn:false};
+const FIELDS = [
+  ['valuePerKm','Valor do frete (R$/km)'], ['kmPerLiter','Consumo médio (km/L)'],
+  ['fuelPrice','Preço do combustível (R$/L)'], ['maintenancePerKm','Manutenção e pneus (R$/km)'],
+  ['otherPerKm','Outros custos (R$/km)'],
+];
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
+};
+let settings = {...DEFAULTS, ...store.get('ff.settings', {})};
+let trips = store.get('ff.trips', []);
+let last = null;
+
+/* ---------- cálculo (mesma regra do app React Native) ---------- */
+function calculateTrip({distanceKm, tollsTotal, freightOverride}, s) {
+  const km = Math.max(0, distanceKm);
+  const costKm = s.countEmptyReturn ? km * 2 : km;
+  const freight = freightOverride ?? km * s.valuePerKm;
+  const liters = s.kmPerLiter > 0 ? costKm / s.kmPerLiter : 0;
+  const fuelCost = liters * s.fuelPrice, maint = costKm * s.maintenancePerKm, other = costKm * s.otherPerKm;
+  const tolls = Math.max(0, tollsTotal), total = fuelCost + maint + other + tolls, profit = freight - total;
+  return {distanceKm: round2(km), freight: round2(freight), fuelLiters: round2(liters), fuelCost: round2(fuelCost),
+    maintenanceCost: round2(maint), otherCost: round2(other), tolls: round2(tolls), totalCost: round2(total),
+    profit: round2(profit), profitPerKm: km > 0 ? round2(profit / km) : 0};
+}
+
+/* ---------- rota: Nominatim (geocodificação) + OSRM (distância), sem chave ---------- */
+async function geocode(q) {
+  const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=br&q=' + encodeURIComponent(q), {headers: {'Accept-Language': 'pt-BR'}});
+  if (!r.ok) throw new Error('Falha na busca do endereço.');
+  const j = await r.json();
+  if (!j.length) throw new Error('Endereço não encontrado: ' + q);
+  return {lat: j[0].lat, lon: j[0].lon};
+}
+async function route(a, b) {
+  const [p, q] = [await geocode(a), await geocode(b)]; // sequencial: respeita o limite de 1 req/s do Nominatim
+  const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${p.lon},${p.lat};${q.lon},${q.lat}?overview=false`);
+  if (!r.ok) throw new Error('Falha ao calcular a rota.');
+  const j = await r.json();
+  if (!j.routes || !j.routes[0]) throw new Error('Rota não encontrada.');
+  return {km: j.routes[0].distance / 1000, min: Math.round(j.routes[0].duration / 60)};
+}
+
+/* ---------- telas ---------- */
+function showTab(name) {
+  for (const t of ['calc','hist','set']) $('tab-' + t).hidden = t !== name;
+  document.querySelectorAll('nav button').forEach((b) => b.setAttribute('aria-selected', b.dataset.tab === name));
+  if (name === 'hist') renderHist();
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll('nav button').forEach((b) => b.onclick = () => showTab(b.dataset.tab));
+
+const line = (l, v, cls = '', strong = false) => `<div class="line"><span>${l}</span><span class="${strong ? 'big ' : ''}${cls}">${v}</span></div>`;
+
+function renderResult(o, d, durationMin, tollsNote) {
+  const r = last.result, ok = r.profit >= 0, c = ok ? 'good' : 'bad';
+  const time = durationMin != null ? ` · ${Math.floor(durationMin / 60)}h${String(durationMin % 60).padStart(2, '0')}` : '';
+  $('result').innerHTML =
+    `<div class="card"><div class="note">${esc(o)} → ${esc(d)}</div>${line('Distância', r.distanceKm.toFixed(0) + ' km' + time)}${line('Valor do frete', brl(r.freight), '', true)}</div>` +
+    `<div class="card">${line('Combustível (' + r.fuelLiters.toFixed(0) + ' L)', brl(r.fuelCost))}${line('Manutenção', brl(r.maintenanceCost))}${line('Outros custos', brl(r.otherCost))}${line('Pedágios', brl(r.tolls))}` +
+    (tollsNote ? '<div class="note">Pedágio não é estimado automaticamente — informe no campo acima.</div>' : '') +
+    `${line('Custo total', brl(r.totalCost), '', true)}</div>` +
+    `<div class="card" style="border:2px solid var(--${c})">${line(ok ? 'Lucro estimado' : 'Prejuízo estimado', brl(r.profit), c, true)}${line('Por km', brl(r.profitPerKm), c)}</div>` +
+    `<div class="stack"><button class="btn" id="saveTrip">Salvar no histórico</button></div>`;
+  $('saveTrip').onclick = (e) => {
+    trips.unshift({id: Date.now(), createdAt: new Date().toISOString(), origin: o, destination: d, result: r});
+    trips = trips.slice(0, 200);
+    if (!store.set('ff.trips', trips)) { $('calcErr').textContent = 'Não foi possível salvar (armazenamento bloqueado).'; return; }
+    e.target.textContent = 'Salvo no histórico ✓'; e.target.disabled = true;
+  };
+  $('result').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+$('calc').onclick = async () => {
+  const o = $('origin').value.trim(), d = $('dest').value.trim(), btn = $('calc');
+  const manual = num($('manualKm').value), tolls = num($('tolls').value);
+  $('calcErr').textContent = ''; $('result').innerHTML = '';
+  if (!Number.isFinite(manual) && (o.length < 3 || d.length < 3)) { $('calcErr').textContent = 'Informe saída e destino (ou a distância manual).'; return; }
+  btn.disabled = true; btn.textContent = 'Aguarde…';
+  try {
+    let km, min = null;
+    if (Number.isFinite(manual) && manual > 0) km = manual;
+    else { const rt = await route(o, d); km = rt.km; min = rt.min; }
+    last = {origin: o || 'Manual', destination: d || 'Manual', result: calculateTrip({distanceKm: km, tollsTotal: Number.isFinite(tolls) ? tolls : 0}, settings)};
+    renderResult(last.origin, last.destination, min, !Number.isFinite(tolls));
+  } catch (e) {
+    $('calcErr').textContent = (e && e.message ? e.message : 'Erro ao calcular.') + ' Verifique a internet ou use a distância manual.';
+  } finally { btn.disabled = false; btn.textContent = 'Calcular viagem'; }
+};
+
+const open = (url) => window.open(url, '_blank', 'noopener');
+$('gmaps').onclick = () => {
+  const o = $('origin').value.trim(), d = $('dest').value.trim();
+  if (!d) { $('calcErr').textContent = 'Informe o destino.'; return; }
+  open('https://www.google.com/maps/dir/?api=1' + (o ? '&origin=' + encodeURIComponent(o) : '') + '&destination=' + encodeURIComponent(d) + '&travelmode=driving');
+};
+$('waze').onclick = () => {
+  const d = $('dest').value.trim();
+  if (!d) { $('calcErr').textContent = 'Informe o destino.'; return; }
+  open('https://waze.com/ul?q=' + encodeURIComponent(d) + '&navigate=yes');
+};
+
+function renderHist() {
+  const el = $('histList');
+  if (!trips.length) { el.innerHTML = '<p class="note">Nenhum frete salvo ainda.</p>'; return; }
+  el.innerHTML = trips.map((t) => {
+    const r = t.result, c = r.profit >= 0 ? 'good' : 'bad';
+    return `<div class="card"><strong>${esc(t.origin)} → ${esc(t.destination)}</strong>
+      <div class="note">${new Date(t.createdAt).toLocaleDateString('pt-BR')} · ${r.distanceKm.toFixed(0)} km · frete ${brl(r.freight)}</div>
+      <div class="big ${c}">${r.profit >= 0 ? 'Lucro' : 'Prejuízo'} ${brl(r.profit)}</div>
+      <div style="text-align:right"><button class="del" data-id="${t.id}" aria-label="Excluir frete">Excluir</button></div></div>`;
+  }).join('');
+  el.querySelectorAll('.del').forEach((b) => b.onclick = () => {
+    trips = trips.filter((t) => String(t.id) !== b.dataset.id); store.set('ff.trips', trips); renderHist();
+  });
+}
+
+/* ---------- ajustes ---------- */
+$('setFields').innerHTML = FIELDS.map(([k, l]) =>
+  `<div class="field"><label for="s_${k}">${l}</label><input id="s_${k}" type="number" inputmode="decimal" min="0" step="0.01"></div>`).join('');
+function fillSettings() {
+  FIELDS.forEach(([k]) => $('s_' + k).value = settings[k]);
+  $('emptyReturn').checked = settings.countEmptyReturn;
+}
+fillSettings();
+$('saveSet').onclick = () => {
+  const next = {...settings, countEmptyReturn: $('emptyReturn').checked};
+  for (const [k, l] of FIELDS) {
+    const n = num($('s_' + k).value);
+    if (!Number.isFinite(n) || n < 0) { $('setMsg').textContent = `Valor inválido em "${l}".`; return; }
+    next[k] = n;
+  }
+  settings = next;
+  $('setMsg').textContent = store.set('ff.settings', settings) ? 'Configurações salvas ✓' : 'Não foi possível salvar (armazenamento bloqueado).';
+};
+$('export').onclick = () => {
+  const blob = new Blob([JSON.stringify({settings, trips}, null, 2)], {type: 'application/json'});
+  const a = Object.assign(document.createElement('a'), {href: URL.createObjectURL(blob), download: 'frete-facil-backup.json'});
+  a.click(); URL.revokeObjectURL(a.href);
+};
+$('importBtn').onclick = () => $('importFile').click();
+$('importFile').onchange = async (e) => {
+  try {
+    const data = JSON.parse(await e.target.files[0].text());
+    if (data.settings) { settings = {...DEFAULTS, ...data.settings}; store.set('ff.settings', settings); fillSettings(); }
+    if (Array.isArray(data.trips)) {
+      const have = new Set(trips.map((t) => t.createdAt));
+      trips = [...trips, ...data.trips.filter((t) => t && t.createdAt && t.result && !have.has(t.createdAt))]
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 200);
+      store.set('ff.trips', trips);
+    }
+    $('setMsg').textContent = 'Backup importado ✓';
+  } catch { $('setMsg').textContent = 'Arquivo de backup inválido.'; }
+  e.target.value = '';
+};
+
+/* ---------- voz (Web Speech API, pt-BR) ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SR) { document.querySelectorAll('.mic').forEach((b) => b.hidden = true); $('voiceNote').hidden = false; }
+let rec = null;
+document.querySelectorAll('.mic').forEach((btn) => btn.onclick = () => {
+  if (rec) { rec.stop(); return; }
+  rec = new SR(); rec.lang = 'pt-BR'; rec.interimResults = false;
+  rec.onstart = () => { btn.classList.add('on'); btn.textContent = '■'; $('calcErr').textContent = ''; };
+  rec.onresult = (e) => { $(btn.dataset.for).value = e.results[0][0].transcript; };
+  rec.onerror = (e) => { $('calcErr').textContent = e.error === 'not-allowed' ? 'Permita o microfone no navegador.' : 'Não entendi, tente de novo.'; };
+  rec.onend = () => { btn.classList.remove('on'); btn.textContent = '🎤'; rec = null; };
+  rec.start();
+});
+</script>
+</body>
+</html>
