@@ -47,7 +47,10 @@ body:not(.locked) #gate{display:none}
 <form id="gate" autocomplete="on">
   <h1>Frete Fácil</h1>
   <div class="field"><label for="gUser">Usuário</label><input id="gUser" name="username" type="text" autocomplete="username" autocapitalize="none" required></div>
-  <div class="field"><label for="gPass">Senha</label><input id="gPass" name="password" type="password" autocomplete="current-password" required></div>
+  <div class="field"><label for="gPass">Senha</label>
+    <div class="row"><input id="gPass" name="password" type="password" autocomplete="current-password" required>
+      <button type="button" class="mic" id="gShow" style="font-size:15px;font-weight:700" aria-pressed="false" aria-label="Mostrar senha">Mostrar</button></div></div>
+  <div class="sw"><label for="gRemember" style="margin:0;color:var(--text)">Lembrar usuário e manter conectado</label><input id="gRemember" type="checkbox" checked></div>
   <button class="btn" id="gBtn" type="submit">Entrar</button>
   <p class="err" id="gErr" role="alert"></p>
 </form>
@@ -80,6 +83,9 @@ body:not(.locked) #gate{display:none}
 <section id="tab-set" role="tabpanel" hidden>
   <h1>Ajustes</h1>
   <div id="setFields"></div>
+  <div class="field"><label for="gKey">Chave do Google Maps (opcional)</label>
+    <input id="gKey" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Cole aqui para usar Google Maps e pedágios"></div>
+  <p class="note">Com a chave, o app usa o Google Maps para confirmar o endereço, calcular a distância e estimar pedágios. Fica salva só neste aparelho.</p>
   <div class="sw"><label for="emptyReturn" style="margin:0;color:var(--text)">Contar volta vazio nos custos</label><input id="emptyReturn" type="checkbox"></div>
   <div class="stack">
     <button class="btn" id="saveSet">Salvar</button>
@@ -136,21 +142,63 @@ function calculateTrip({distanceKm, tollsTotal, freightOverride}, s) {
     profit: round2(profit), profitPerKm: km > 0 ? round2(profit / km) : 0};
 }
 
-/* ---------- rota: Nominatim (geocodificação) + OSRM (distância), sem chave ---------- */
-async function geocode(q) {
+/* ---------- rota: Google Maps (com chave nos Ajustes) ou, sem chave, Nominatim + OSRM ---------- */
+async function geocodeGoogle(q, key) {
+  const r = await fetch('https://maps.googleapis.com/maps/api/geocode/json?region=br&language=pt-BR&address=' + encodeURIComponent(q) + '&key=' + encodeURIComponent(key));
+  const j = await r.json();
+  if (j.status === 'ZERO_RESULTS') throw new Error('Endereço não encontrado: ' + q);
+  if (j.status !== 'OK') throw new Error('Google Maps: ' + (j.error_message || j.status));
+  const x = j.results[0];
+  return {lat: x.geometry.location.lat, lon: x.geometry.location.lng, addr: x.formatted_address};
+}
+async function routeGoogle(p, q, key) {
+  const wp = (x) => ({location: {latLng: {latitude: +x.lat, longitude: +x.lon}}});
+  const r = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Goog-Api-Key': key,
+      'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.travelAdvisory.tollInfo'},
+    body: JSON.stringify({origin: wp(p), destination: wp(q), travelMode: 'DRIVE', regionCode: 'BR', languageCode: 'pt-BR',
+      extraComputations: ['TOLLS'], routeModifiers: {vehicleInfo: {emissionType: 'DIESEL'}}}),
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error('Google Maps: ' + ((j.error && j.error.message) || r.status));
+  const rt = j.routes && j.routes[0];
+  if (!rt) throw new Error('Rota não encontrada.');
+  // Sem tollInfo = sem pedágio na rota; tollInfo sem preço = há pedágio, valor desconhecido.
+  const ti = rt.travelAdvisory && rt.travelAdvisory.tollInfo;
+  let tolls = 0, tollState = 'none';
+  if (ti) {
+    const prices = (ti.estimatedPrice || []).filter((m) => m.currencyCode === 'BRL');
+    if (prices.length) { tolls = prices.reduce((s, m) => s + Number(m.units || 0) + (m.nanos || 0) / 1e9, 0); tollState = 'ok'; }
+    else { tolls = null; tollState = 'unknown'; }
+  }
+  return {km: (rt.distanceMeters || 0) / 1000, min: Math.round(parseInt(rt.duration, 10) / 60), tolls, tollState};
+}
+async function geocodeOsm(q) {
   const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=br&q=' + encodeURIComponent(q), {headers: {'Accept-Language': 'pt-BR'}});
   if (!r.ok) throw new Error('Falha na busca do endereço.');
   const j = await r.json();
   if (!j.length) throw new Error('Endereço não encontrado: ' + q);
-  return {lat: j[0].lat, lon: j[0].lon};
+  return {lat: j[0].lat, lon: j[0].lon, addr: j[0].display_name};
 }
-async function route(a, b) {
-  const [p, q] = [await geocode(a), await geocode(b)]; // sequencial: respeita o limite de 1 req/s do Nominatim
+async function routeOsm(p, q) {
   const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${p.lon},${p.lat};${q.lon},${q.lat}?overview=false`);
   if (!r.ok) throw new Error('Falha ao calcular a rota.');
   const j = await r.json();
   if (!j.routes || !j.routes[0]) throw new Error('Rota não encontrada.');
-  return {km: j.routes[0].distance / 1000, min: Math.round(j.routes[0].duration / 60)};
+  return {km: j.routes[0].distance / 1000, min: Math.round(j.routes[0].duration / 60), tolls: null, tollState: 'na'};
+}
+async function route(a, b) {
+  const key = store.get('ff.gkey', '');
+  let gErr = '';
+  if (key) {
+    try {
+      const p = await geocodeGoogle(a, key), q = await geocodeGoogle(b, key);
+      return {...(await routeGoogle(p, q, key)), oAddr: p.addr, dAddr: q.addr, source: 'Google Maps'};
+    } catch (e) { gErr = e.message; }
+  }
+  const p = await geocodeOsm(a), q = await geocodeOsm(b); // sequencial: respeita o limite de 1 req/s do Nominatim
+  return {...(await routeOsm(p, q)), oAddr: p.addr, dAddr: q.addr, source: 'OpenStreetMap', gErr};
 }
 
 /* ---------- telas ---------- */
@@ -164,13 +212,18 @@ document.querySelectorAll('nav button').forEach((b) => b.onclick = () => showTab
 
 const line = (l, v, cls = '', strong = false) => `<div class="line"><span>${l}</span><span class="${strong ? 'big ' : ''}${cls}">${v}</span></div>`;
 
-function renderResult(o, d, durationMin, tollsNote) {
+function renderResult(o, d, durationMin, info) {
   const r = last.result, ok = r.profit >= 0, c = ok ? 'good' : 'bad';
   const time = durationMin != null ? ` · ${Math.floor(durationMin / 60)}h${String(durationMin % 60).padStart(2, '0')}` : '';
-  $('result').innerHTML =
-    `<div class="card"><div class="note">${esc(o)} → ${esc(d)}</div>${line('Distância', r.distanceKm.toFixed(0) + ' km' + time)}${line('Valor do frete', brl(r.freight), '', true)}</div>` +
+  const confirm = info.source
+    ? `<div class="card" role="group" aria-label="Endereços encontrados"><div class="note">Endereços encontrados (${esc(info.source)}) — confira:</div>` +
+      `<div><strong>Saída:</strong> ${esc(o)}</div><div style="margin-top:6px"><strong>Destino:</strong> ${esc(d)}</div>` +
+      (info.gErr ? `<div class="err">Google Maps indisponível (${esc(info.gErr)}). Usei o OpenStreetMap.</div>` : '') + '</div>'
+    : '';
+  $('result').innerHTML = confirm +
+    `<div class="card">${line('Distância', r.distanceKm.toFixed(0) + ' km' + time)}${line('Valor do frete', brl(r.freight), '', true)}</div>` +
     `<div class="card">${line('Combustível (' + r.fuelLiters.toFixed(0) + ' L)', brl(r.fuelCost))}${line('Manutenção', brl(r.maintenanceCost))}${line('Outros custos', brl(r.otherCost))}${line('Pedágios', brl(r.tolls))}` +
-    (tollsNote ? '<div class="note">Pedágio não é estimado automaticamente — informe no campo acima.</div>' : '') +
+    (info.tollNote ? `<div class="note">${esc(info.tollNote)}</div>` : '') +
     `${line('Custo total', brl(r.totalCost), '', true)}</div>` +
     `<div class="card" style="border:2px solid var(--${c})">${line(ok ? 'Lucro estimado' : 'Prejuízo estimado', brl(r.profit), c, true)}${line('Por km', brl(r.profitPerKm), c)}</div>` +
     `<div class="stack"><button class="btn" id="saveTrip">Salvar no histórico</button></div>`;
@@ -190,11 +243,25 @@ $('calc').onclick = async () => {
   if (!Number.isFinite(manual) && (o.length < 3 || d.length < 3)) { $('calcErr').textContent = 'Informe saída e destino (ou a distância manual).'; return; }
   btn.disabled = true; btn.textContent = 'Aguarde…';
   try {
-    let km, min = null;
-    if (Number.isFinite(manual) && manual > 0) km = manual;
-    else { const rt = await route(o, d); km = rt.km; min = rt.min; }
-    last = {origin: o || 'Manual', destination: d || 'Manual', result: calculateTrip({distanceKm: km, tollsTotal: Number.isFinite(tolls) ? tolls : 0}, settings)};
-    renderResult(last.origin, last.destination, min, !Number.isFinite(tolls));
+    const manualTolls = Number.isFinite(tolls);
+    let km, min = null, auto = null, info = {};
+    if (Number.isFinite(manual) && manual > 0) {
+      km = manual;
+      if (!manualTolls) info.tollNote = 'Pedágio manual: informe no campo acima.';
+    } else {
+      const rt = await route(o, d);
+      km = rt.km; min = rt.min; auto = rt.tolls;
+      info = {source: rt.source, gErr: rt.gErr, oAddr: rt.oAddr, dAddr: rt.dAddr};
+      if (!manualTolls) info.tollNote = {
+        ok: 'Pedágio estimado pelo Google Maps.',
+        none: 'Google Maps: sem pedágio nesta rota.',
+        unknown: 'Há pedágio na rota, mas o Google não informou o preço. Informe o valor no campo acima.',
+        na: 'Pedágio não é estimado sem a chave do Google (Ajustes). Informe no campo acima.',
+      }[rt.tollState];
+    }
+    const origin = info.oAddr || o || 'Manual', destination = info.dAddr || d || 'Manual';
+    last = {origin, destination, result: calculateTrip({distanceKm: km, tollsTotal: manualTolls ? tolls : (auto ?? 0)}, settings)};
+    renderResult(origin, destination, min, info);
   } catch (e) {
     $('calcErr').textContent = (e && e.message ? e.message : 'Erro ao calcular.') + ' Verifique a internet ou use a distância manual.';
   } finally { btn.disabled = false; btn.textContent = 'Calcular viagem'; }
@@ -233,6 +300,7 @@ $('setFields').innerHTML = FIELDS.map(([k, l]) =>
 function fillSettings() {
   FIELDS.forEach(([k]) => $('s_' + k).value = settings[k]);
   $('emptyReturn').checked = settings.countEmptyReturn;
+  $('gKey').value = store.get('ff.gkey', '');
 }
 fillSettings();
 $('saveSet').onclick = () => {
@@ -243,6 +311,8 @@ $('saveSet').onclick = () => {
     next[k] = n;
   }
   settings = next;
+  const gk = $('gKey').value.trim();
+  if (gk) store.set('ff.gkey', gk); else { try { localStorage.removeItem('ff.gkey'); } catch {} }
   $('setMsg').textContent = store.set('ff.settings', settings) ? 'Configurações salvas ✓' : 'Não foi possível salvar (armazenamento bloqueado).';
 };
 $('export').onclick = () => {
@@ -291,6 +361,15 @@ async function derive(user, pass) {
 const unlock = () => document.body.classList.remove('locked');
 let fails = 0, lockedUntil = 0;
 if (store.get('ff.auth', '') === AUTH.hash) unlock();
+$('gUser').value = store.get('ff.user', '');
+if (store.get('ff.user', '')) $('gPass').focus();
+$('gShow').onclick = () => {
+  const show = $('gPass').type === 'password';
+  $('gPass').type = show ? 'text' : 'password';
+  $('gShow').textContent = show ? 'Ocultar' : 'Mostrar';
+  $('gShow').setAttribute('aria-pressed', String(show));
+  $('gShow').setAttribute('aria-label', show ? 'Ocultar senha' : 'Mostrar senha');
+};
 $('gate').onsubmit = async (e) => {
   e.preventDefault();
   const wait = Math.ceil((lockedUntil - Date.now()) / 1000);
@@ -299,7 +378,13 @@ $('gate').onsubmit = async (e) => {
   $('gBtn').disabled = true; $('gErr').textContent = '';
   try {
     const h = await derive($('gUser').value, $('gPass').value);
-    if (h === AUTH.hash) { fails = 0; store.set('ff.auth', h); $('gPass').value = ''; unlock(); return; }
+    if (h === AUTH.hash) {
+      fails = 0;
+      if ($('gRemember').checked) { store.set('ff.auth', h); store.set('ff.user', $('gUser').value.trim()); }
+      else { try { localStorage.removeItem('ff.auth'); localStorage.removeItem('ff.user'); } catch {} }
+      $('gPass').value = ''; $('gPass').type = 'password'; $('gShow').textContent = 'Mostrar';
+      unlock(); return;
+    }
     fails++;
     if (fails >= 3) { lockedUntil = Date.now() + 30000; fails = 0; $('gErr').textContent = 'Usuário ou senha incorretos. Aguarde 30s.'; }
     else $('gErr').textContent = 'Usuário ou senha incorretos.';
