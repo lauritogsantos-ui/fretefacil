@@ -184,12 +184,27 @@ async function routeGoogle(p, q, key) {
   }
   return {km: (rt.distanceMeters || 0) / 1000, min: Math.round(parseInt(rt.duration, 10) / 60), tolls, tollState};
 }
+// Versões do endereço, da mais completa à mais simples (o OSM nem sempre conhece bairro/CEP).
+function osmCandidates(q) {
+  const segs = q.split(',').map((s) => s.trim()).filter((s) => s && !/^\d{5}-?\d{3}$/.test(s));
+  const out = [segs.join(', ')];
+  if (segs.length >= 3) {
+    const city = segs[segs.length - 1], street = segs[0], num = /^\d+/.test(segs[1]) ? segs[1] : '';
+    if (num) out.push([street, num, city].join(', '));
+    out.push([street, city].join(', '));
+  }
+  return [...new Set(out)];
+}
 async function geocodeOsm(q) {
-  const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=br&q=' + encodeURIComponent(q), {headers: {'Accept-Language': 'pt-BR'}});
-  if (!r.ok) throw new Error('Falha na busca do endereço.');
-  const j = await r.json();
-  if (!j.length) throw new Error('Endereço não encontrado: ' + q);
-  return {lat: j[0].lat, lon: j[0].lon, addr: j[0].display_name};
+  const cands = osmCandidates(q);
+  for (let i = 0; i < cands.length; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 1100)); // limite de 1 req/s do Nominatim
+    const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=br&q=' + encodeURIComponent(cands[i]), {headers: {'Accept-Language': 'pt-BR'}});
+    if (!r.ok) throw new Error('Falha na busca do endereço.');
+    const j = await r.json();
+    if (j.length) return {lat: j[0].lat, lon: j[0].lon, addr: j[0].display_name, approx: i > 0};
+  }
+  throw new Error('Endereço não encontrado: ' + q);
 }
 async function routeOsm(p, q) {
   const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${p.lon},${p.lat};${q.lon},${q.lat}?overview=false`);
@@ -208,7 +223,7 @@ async function route(a, b) {
     } catch (e) { gErr = e.message; }
   }
   const p = await geocodeOsm(a), q = await geocodeOsm(b); // sequencial: respeita o limite de 1 req/s do Nominatim
-  return {...(await routeOsm(p, q)), oAddr: p.addr, dAddr: q.addr, source: 'OpenStreetMap', gErr};
+  return {...(await routeOsm(p, q)), oAddr: p.addr, dAddr: q.addr, source: 'OpenStreetMap', gErr, approx: p.approx || q.approx};
 }
 
 /* ---------- telas ---------- */
@@ -228,7 +243,8 @@ function renderResult(o, d, durationMin, info) {
   const confirm = info.source
     ? `<div class="card" role="group" aria-label="Endereços encontrados"><div class="note">Endereços encontrados (${esc(info.source)}) — confira:</div>` +
       `<div><strong>Saída:</strong> ${esc(o)}</div><div style="margin-top:6px"><strong>Destino:</strong> ${esc(d)}</div>` +
-      (info.gErr ? `<div class="err">Google Maps indisponível (${esc(info.gErr)}). Usei o OpenStreetMap.</div>` : '') + '</div>'
+      (info.approx ? '<div class="err">Endereço aproximado: o mapa não achou o número/bairro exato e usou a rua e a cidade. Confira se o local está certo.</div>' : '') +
+      (info.gErr ?`<div class="err">Google Maps indisponível (${esc(info.gErr)}). Usei o OpenStreetMap.</div>` : '') + '</div>'
     : '';
   $('result').innerHTML = confirm +
     `<div class="card">${line('Distância', r.distanceKm.toFixed(0) + ' km' + time)}${line('Valor do frete', brl(r.freight), '', true)}</div>` +
@@ -261,7 +277,7 @@ $('calc').onclick = async () => {
     } else {
       const rt = await route(o, d);
       km = rt.km; min = rt.min; auto = rt.tolls;
-      info = {source: rt.source, gErr: rt.gErr, oAddr: rt.oAddr, dAddr: rt.dAddr};
+      info = {source: rt.source, gErr: rt.gErr, approx: rt.approx, oAddr: rt.oAddr, dAddr: rt.dAddr};
       if (!manualTolls) info.tollNote = {
         ok: 'Pedágio estimado pelo Google Maps.',
         none: 'Google Maps: sem pedágio nesta rota.',
