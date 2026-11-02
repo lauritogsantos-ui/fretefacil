@@ -37,9 +37,21 @@ nav button[aria-selected=true]{color:var(--primary);box-shadow:inset 0 3px 0 var
 .sw input{width:28px;height:28px}
 .del{background:none;border:0;color:var(--bad);font-weight:700;min-height:48px;padding:0 4px}
 [hidden]{display:none!important}
+#gate{max-width:420px;margin:0 auto;padding:32px 16px}
+body:not(.locked) #gate{display:none}
+.locked main,.locked nav{display:none}
 </style>
 </head>
-<body>
+<body class="locked">
+
+<form id="gate" autocomplete="on">
+  <h1>Frete Fácil</h1>
+  <div class="field"><label for="gUser">Usuário</label><input id="gUser" name="username" type="text" autocomplete="username" autocapitalize="none" required></div>
+  <div class="field"><label for="gPass">Senha</label><input id="gPass" name="password" type="password" autocomplete="current-password" required></div>
+  <button class="btn" id="gBtn" type="submit">Entrar</button>
+  <p class="err" id="gErr" role="alert"></p>
+</form>
+
 <main>
 
 <section id="tab-calc" role="tabpanel">
@@ -73,6 +85,7 @@ nav button[aria-selected=true]{color:var(--primary);box-shadow:inset 0 3px 0 var
     <button class="btn" id="saveSet">Salvar</button>
     <button class="btn sec" id="export">Exportar backup</button>
     <button class="btn sec" id="importBtn">Importar backup</button>
+    <button class="btn sec" id="logout">Sair</button>
     <input id="importFile" type="file" accept="application/json" hidden>
   </div>
   <p class="note" id="setMsg" role="status"></p>
@@ -266,6 +279,37 @@ document.querySelectorAll('.mic').forEach((btn) => btn.onclick = () => {
   rec.onend = () => { btn.classList.remove('on'); btn.textContent = '🎤'; rec = null; };
   rec.start();
 });
+
+/* ---------- login (barreira de acesso; o código da página é público, então não é segurança forte) ---------- */
+const AUTH = {salt: '67ec2ce06dd5f91652a367fef261ba52', hash: 'c9efd5d39c1df4d2e9a1e41148fbb9dbdae19a933d897c59664bea261fdc22c1', iter: 150000};
+const unhex = (h) => new Uint8Array(h.match(/../g).map((x) => parseInt(x, 16)));
+const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+async function derive(user, pass) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(user.trim().toLowerCase().normalize('NFC') + '\n' + pass), 'PBKDF2', false, ['deriveBits']);
+  return toHex(await crypto.subtle.deriveBits({name: 'PBKDF2', hash: 'SHA-256', salt: unhex(AUTH.salt), iterations: AUTH.iter}, key, 256));
+}
+const unlock = () => document.body.classList.remove('locked');
+let fails = 0, lockedUntil = 0;
+if (store.get('ff.auth', '') === AUTH.hash) unlock();
+$('gate').onsubmit = async (e) => {
+  e.preventDefault();
+  const wait = Math.ceil((lockedUntil - Date.now()) / 1000);
+  if (wait > 0) { $('gErr').textContent = `Aguarde ${wait}s para tentar de novo.`; return; }
+  if (!(window.crypto && crypto.subtle)) { $('gErr').textContent = 'Este navegador não suporta o login. Abra pelo endereço https.'; return; }
+  $('gBtn').disabled = true; $('gErr').textContent = '';
+  try {
+    const h = await derive($('gUser').value, $('gPass').value);
+    if (h === AUTH.hash) { fails = 0; store.set('ff.auth', h); $('gPass').value = ''; unlock(); return; }
+    fails++;
+    if (fails >= 3) { lockedUntil = Date.now() + 30000; fails = 0; $('gErr').textContent = 'Usuário ou senha incorretos. Aguarde 30s.'; }
+    else $('gErr').textContent = 'Usuário ou senha incorretos.';
+  } catch { $('gErr').textContent = 'Não foi possível verificar. Tente de novo.'; }
+  finally { $('gBtn').disabled = false; }
+};
+$('logout').onclick = () => {
+  try { localStorage.removeItem('ff.auth'); } catch {}
+  $('gPass').value = ''; document.body.classList.add('locked'); window.scrollTo(0, 0);
+};
 </script>
 </body>
 </html>
