@@ -38,6 +38,8 @@ nav button[aria-selected=true]{color:var(--primary);box-shadow:inset 0 3px 0 var
 .del{background:none;border:0;color:var(--bad);font-weight:700;min-height:48px;padding:0 4px}
 [hidden]{display:none!important}
 #gate{max-width:420px;margin:0 auto;padding:32px 16px}
+details.cep{margin:-6px 0 14px}
+details.cep summary{min-height:44px;display:flex;align-items:center;color:var(--primary);font-weight:700;cursor:pointer}
 body:not(.locked) #gate{display:none}
 .locked main,.locked nav{display:none}
 </style>
@@ -61,8 +63,16 @@ body:not(.locked) #gate{display:none}
   <h1>Calcular frete</h1>
   <div class="field"><label for="origin">Saída</label>
     <div class="row"><input id="origin" type="text" placeholder="Rua, número, cidade" autocomplete="off"><button class="mic" data-for="origin" aria-label="Falar o endereço de saída">🎤</button></div></div>
+  <details class="cep" data-for="origin"><summary>Buscar saída por CEP</summary>
+    <div class="row"><input type="text" inputmode="numeric" class="cepIn" placeholder="CEP (00000-000)" maxlength="9" autocomplete="off" aria-label="CEP da saída"><input type="text" class="cepNum" placeholder="Nº" maxlength="10" autocomplete="off" aria-label="Número da saída" style="max-width:110px"></div>
+    <button type="button" class="btn sec cepBtn" style="margin-top:8px">Preencher endereço</button>
+    <p class="note cepMsg" role="status"></p></details>
   <div class="field"><label for="dest">Destino</label>
     <div class="row"><input id="dest" type="text" placeholder="Rua, número, cidade" autocomplete="off"><button class="mic" data-for="dest" aria-label="Falar o endereço de destino">🎤</button></div></div>
+  <details class="cep" data-for="dest"><summary>Buscar destino por CEP</summary>
+    <div class="row"><input type="text" inputmode="numeric" class="cepIn" placeholder="CEP (00000-000)" maxlength="9" autocomplete="off" aria-label="CEP do destino"><input type="text" class="cepNum" placeholder="Nº" maxlength="10" autocomplete="off" aria-label="Número do destino" style="max-width:110px"></div>
+    <button type="button" class="btn sec cepBtn" style="margin-top:8px">Preencher endereço</button>
+    <p class="note cepMsg" role="status"></p></details>
   <div class="field"><label for="tolls">Pedágios (R$) — opcional</label><input id="tolls" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0,00"></div>
   <div class="field"><label for="manualKm">Distância manual (km) — se a busca falhar</label><input id="manualKm" type="number" inputmode="decimal" min="0" step="0.1" placeholder="Deixe vazio para calcular pela rota"></div>
   <div class="stack">
@@ -266,6 +276,29 @@ $('calc').onclick = async () => {
     $('calcErr').textContent = (e && e.message ? e.message : 'Erro ao calcular.') + ' Verifique a internet ou use a distância manual.';
   } finally { btn.disabled = false; btn.textContent = 'Calcular viagem'; }
 };
+
+/* ---------- busca por CEP (ViaCEP) ---------- */
+document.querySelectorAll('details.cep').forEach((box) => {
+  const cep = box.querySelector('.cepIn'), numI = box.querySelector('.cepNum'), btn = box.querySelector('.cepBtn'), msg = box.querySelector('.cepMsg');
+  cep.oninput = () => { const d = cep.value.replace(/\D/g, '').slice(0, 8); cep.value = d.length > 5 ? d.slice(0, 5) + '-' + d.slice(5) : d; };
+  btn.onclick = async () => {
+    const d = cep.value.replace(/\D/g, '');
+    if (d.length !== 8) { msg.textContent = 'Digite os 8 números do CEP.'; return; }
+    btn.disabled = true; msg.textContent = 'Buscando…';
+    try {
+      const r = await fetch('https://viacep.com.br/ws/' + d + '/json/');
+      if (!r.ok) throw new Error('http');
+      const j = await r.json();
+      if (j.erro) { msg.textContent = 'CEP não encontrado.'; return; }
+      const n = numI.value.trim();
+      const street = j.logradouro ? [j.logradouro, n].filter(Boolean).join(', ') : '';
+      const city = j.localidade ? (j.uf ? j.localidade + ' - ' + j.uf : j.localidade) : '';
+      $(box.dataset.for).value = [street, j.bairro, city, d.slice(0, 5) + '-' + d.slice(5)].filter(Boolean).join(', ');
+      msg.textContent = (j.logradouro && !n ? 'Preenchido sem número — o endereço será aproximado. ' : 'Endereço preenchido ✓ ') + 'Confira no campo acima.';
+    } catch { msg.textContent = 'Não foi possível buscar o CEP. Verifique a internet.'; }
+    finally { btn.disabled = false; }
+  };
+});
 
 const open = (url) => window.open(url, '_blank', 'noopener');
 $('gmaps').onclick = () => {
